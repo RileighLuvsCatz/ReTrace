@@ -78,7 +78,15 @@ func Start(config Config) error {
 	}
 	defer logFile.Close()
 
-	command := exec.Command(executable, "daemon", "run")
+	command := exec.Command(
+		executable,
+		"daemon",
+		"--db", config.DBPath,
+		"--pid-file", config.PIDPath,
+		"--log-file", config.LogPath,
+		"--poll-interval", config.PollInterval.String(),
+		"run",
+	)
 	command.Stdout = logFile
 	command.Stderr = logFile
 	configureBackgroundProcess(command)

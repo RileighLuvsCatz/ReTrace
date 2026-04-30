@@ -143,6 +143,177 @@ func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
 	return sessions, nil
 }
 
+// AppUsageBetween returns app totals for sessions that overlap the given range.
+func (s *Store) AppUsageBetween(ctx context.Context, start time.Time, end time.Time) ([]AppUsage, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT app, COALESCE(SUM(duration), 0), COUNT(*)
+		 FROM sessions
+		 WHERE started_at < ? AND ended_at > ?
+		 GROUP BY app
+		 ORDER BY SUM(duration) DESC, app ASC`,
+		end,
+		start,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query app usage: %w", err)
+	}
+	defer rows.Close()
+
+	var usage []AppUsage
+	for rows.Next() {
+		var row AppUsage
+		if err := rows.Scan(&row.App, &row.Seconds, &row.Sessions); err != nil {
+			return nil, fmt.Errorf("scan app usage: %w", err)
+		}
+
+		usage = append(usage, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate app usage: %w", err)
+	}
+
+	return usage, nil
+}
+
+// DailyUsageBetween returns daily totals for sessions that overlap the given range.
+func (s *Store) DailyUsageBetween(ctx context.Context, start time.Time, end time.Time) ([]DailyUsage, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, app, title, started_at, ended_at, duration
+		 FROM sessions
+		 WHERE started_at < ? AND ended_at > ?
+		 ORDER BY started_at ASC, id ASC`,
+		end,
+		start,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query daily usage: %w", err)
+	}
+	defer rows.Close()
+
+	byDay := make(map[time.Time]*DailyUsage)
+	var order []time.Time
+	location := start.Location()
+
+	for rows.Next() {
+		session, err := scanSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan daily session: %w", err)
+		}
+
+		day := startOfDay(session.StartedAt.In(location))
+		row, ok := byDay[day]
+		if !ok {
+			usage := DailyUsage{Day: day}
+			row = &usage
+			byDay[day] = row
+			order = append(order, day)
+		}
+		row.Seconds += session.Duration
+		row.Sessions++
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate daily usage: %w", err)
+	}
+
+	var usage []DailyUsage
+	for _, day := range order {
+		usage = append(usage, *byDay[day])
+	}
+
+	return usage, nil
+}
+
+// AppUsageByName returns totals and sessions for one application, matching case-insensitively.
+func (s *Store) AppUsageByName(ctx context.Context, app string) (AppUsage, []Session, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, app, title, started_at, ended_at, duration
+		 FROM sessions
+		 WHERE app = ? COLLATE NOCASE
+		 ORDER BY started_at DESC, id DESC`,
+		app,
+	)
+	if err != nil {
+		return AppUsage{}, nil, fmt.Errorf("query app sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var usage AppUsage
+	var sessions []Session
+	for rows.Next() {
+		session, err := scanSession(rows)
+		if err != nil {
+			return AppUsage{}, nil, fmt.Errorf("scan app session: %w", err)
+		}
+
+		if usage.App == "" {
+			usage.App = session.App
+		}
+		usage.Seconds += session.Duration
+		usage.Sessions++
+		sessions = append(sessions, session)
+	}
+
+	if err := rows.Err(); err != nil {
+		return AppUsage{}, nil, fmt.Errorf("iterate app sessions: %w", err)
+	}
+	if usage.App == "" {
+		usage.App = app
+	}
+
+	return usage, sessions, nil
+}
+
+// TotalUsage returns total recorded usage for all sessions.
+func (s *Store) TotalUsage(ctx context.Context) (int64, int64, error) {
+	var seconds sql.NullInt64
+	var sessions int64
+	err := s.db.QueryRowContext(ctx, `SELECT SUM(duration), COUNT(*) FROM sessions`).Scan(&seconds, &sessions)
+	if err != nil {
+		return 0, 0, fmt.Errorf("query total usage: %w", err)
+	}
+
+	return seconds.Int64, sessions, nil
+}
+
+// MostActiveHour returns the hour with the highest recorded usage.
+func (s *Store) MostActiveHour(ctx context.Context) (HourUsage, bool, error) {
+	sessions, err := s.ListSessions(ctx)
+	if err != nil {
+		return HourUsage{}, false, err
+	}
+	if len(sessions) == 0 {
+		return HourUsage{}, false, nil
+	}
+
+	byHour := make(map[int]HourUsage)
+	for _, session := range sessions {
+		hour := session.StartedAt.Hour()
+		usage := byHour[hour]
+		usage.Hour = hour
+		usage.Seconds += session.Duration
+		usage.Sessions++
+		byHour[hour] = usage
+	}
+
+	best := HourUsage{Hour: -1}
+	for _, usage := range byHour {
+		if usage.Seconds > best.Seconds || (usage.Seconds == best.Seconds && usage.Sessions > best.Sessions) {
+			best = usage
+		}
+	}
+
+	return best, true, nil
+}
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
 // UpdateSession replaces the editable fields for an existing session.
 func (s *Store) UpdateSession(ctx context.Context, session Session) error {
 	result, err := s.db.ExecContext(

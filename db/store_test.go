@@ -103,6 +103,86 @@ func TestSessionRequiredFields(t *testing.T) {
 	}
 }
 
+func TestUsageAggregates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	base := time.Date(2026, 4, 27, 9, 0, 0, 0, time.UTC)
+
+	sessions := []Session{
+		testSession("Editor", "ReTrace", base),
+		testSession("Browser", "Docs", base.Add(2*time.Hour)),
+		testSession("Editor", "Tests", base.AddDate(0, 0, 1)),
+	}
+	for i := range sessions {
+		if err := store.CreateSession(ctx, &sessions[i]); err != nil {
+			t.Fatalf("create session %d: %v", i, err)
+		}
+	}
+
+	apps, err := store.AppUsageBetween(ctx, base, base.AddDate(0, 0, 7))
+	if err != nil {
+		t.Fatalf("app usage: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("expected 2 app totals, got %d", len(apps))
+	}
+	if apps[0].App != "Editor" || apps[0].Seconds != 1200 || apps[0].Sessions != 2 {
+		t.Fatalf("unexpected top app usage: %+v", apps[0])
+	}
+
+	days, err := store.DailyUsageBetween(ctx, base, base.AddDate(0, 0, 7))
+	if err != nil {
+		t.Fatalf("daily usage: %v", err)
+	}
+	if len(days) != 2 {
+		t.Fatalf("expected 2 daily totals, got %d", len(days))
+	}
+	if days[0].Seconds != 1200 || days[0].Sessions != 2 {
+		t.Fatalf("unexpected first day usage: %+v", days[0])
+	}
+
+	total, count, err := store.TotalUsage(ctx)
+	if err != nil {
+		t.Fatalf("total usage: %v", err)
+	}
+	if total != 1800 || count != 3 {
+		t.Fatalf("unexpected total usage: total=%d count=%d", total, count)
+	}
+
+	hour, ok, err := store.MostActiveHour(ctx)
+	if err != nil {
+		t.Fatalf("most active hour: %v", err)
+	}
+	if !ok || hour.Hour != 9 || hour.Seconds != 1200 {
+		t.Fatalf("unexpected most active hour: ok=%t hour=%+v", ok, hour)
+	}
+}
+
+func TestAppUsageByName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	session := testSession("Editor", "ReTrace", time.Date(2026, 4, 29, 9, 0, 0, 0, time.UTC))
+
+	if err := store.CreateSession(ctx, &session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	usage, sessions, err := store.AppUsageByName(ctx, "editor")
+	if err != nil {
+		t.Fatalf("app usage by name: %v", err)
+	}
+	if usage.App != "Editor" || usage.Seconds != 600 || usage.Sessions != 1 {
+		t.Fatalf("unexpected app usage: %+v", usage)
+	}
+	if len(sessions) != 1 || sessions[0].Title != "ReTrace" {
+		t.Fatalf("unexpected sessions: %+v", sessions)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 

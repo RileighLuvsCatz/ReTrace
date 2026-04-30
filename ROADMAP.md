@@ -42,11 +42,11 @@ CREATE TABLE sessions (
 ## Phase 3 — CLI with Cobra
 > Goal: A usable command-line interface to query your data.
 
-- [ ] `retrace daemon start` / `stop` / `status`
-- [ ] `retrace today` — app usage breakdown for today
-- [ ] `retrace week` — weekly summary
-- [ ] `retrace app <name>` — stats for a specific app
-- [ ] `retrace stats` — top apps, total screen time, most active hour
+- [x] `retrace daemon start` / `stop` / `status`
+- [x] `retrace today` — app usage breakdown for today
+- [x] `retrace week` — weekly summary
+- [x] `retrace app <name>` — stats for a specific app
+- [x] `retrace stats` — top apps, total screen time, most active hour
 
 ---
 
