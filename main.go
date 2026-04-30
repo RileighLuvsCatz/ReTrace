@@ -1,7 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"os"
+
+	"github.com/RileighLuvsCatz/retrace/cmd"
+)
 
 func main() {
-	fmt.Println("ReTrace")
+	os.Exit(cmd.Execute())
 }
